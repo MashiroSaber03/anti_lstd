@@ -73,13 +73,22 @@ class QQGroupRafflerPlugin(star.Star):
         data = {
             "group_id": group_id
         }
+        logger.debug(f"请求 NapCat API, URL: {url}, Headers: {headers}, Data: {data}")
 
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers, json=data) as response:
+                    logger.debug(f"NapCat API 响应状态码: {response.status}")
                     response_data = await response.json()
+                    logger.debug(f"NapCat API 响应内容: {response_data}")
+
                     if response.status == 200 and response_data.get("code") == 0:
-                        member_list = [str(member["user_id"]) for member in response_data.get("data", [])] # 提取QQ号
+                        member_list = []
+                        if "data" in response_data and isinstance(response_data["data"], list):
+                            member_list = [str(member.get("user_id", "")) for member in response_data["data"] if isinstance(member, dict)]
+                        else:
+                             logger.warning(f"NapCat API 响应数据格式不正确: {response_data}")
+                        
                         logger.info(f"成功获取群成员列表，群号: {group_id}，成员数量: {len(member_list)}")
                         return member_list
                     else:
