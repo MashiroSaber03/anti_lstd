@@ -7,7 +7,6 @@ import astrbot.api.event.filter as filter
 from astrbot.api.event import AstrMessageEvent, MessageEventResult
 from astrbot.api import llm_tool, logger
 from astrbot.core.message import components
-import json  # 导入 json 模块
 
 @star.register(
     "qq_group_raffler",  # 插件名称
@@ -66,39 +65,32 @@ class QQGroupRafflerPlugin(star.Star):
             logger.error("NapCat API URL or API Key not configured.")
             return None
 
-        url = f"{self.napcat_api_url}/get_group_member_list"  # 替换为实际的 NapCat 获取群成员 API
+        url = f"{self.napcat_api_url}/获取群成员列表"  # 替换为实际的 NapCat 获取群成员列表 API
         headers = {
             "Authorization": f"Bearer {self.napcat_api_key}",
+            "Content-Type": "application/json"
         }
         data = {
-            "group_id": group_id,
-            "no_cache": False # 默认不使用缓存
+            "group_id": group_id
         }
-        logger.debug(f"请求 NapCat API, URL: {url}, Headers: {headers}, Data: {data}")
+
+        logger.debug(f"请求 NapCat API，URL: {url}，Headers: {headers}，Data: {data}")
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(url, headers=headers) as ws: # Use websockets and remove data from connect
-                    logger.debug(f"NapCat API 响应状态码: {ws.response.status if ws.response else 'N/A'}") # Add status from response
-                    await ws.send_str(json.dumps(data)) # Send the data in json format
-
-                    msg = await ws.receive()
-                    response_data = json.loads(msg.data)
-
+                async with session.post(url, headers=headers, json=data) as response:
+                    logger.debug(f"NapCat API 响应状态码: {response.status}")
+                    response_data = await response.json()
                     logger.debug(f"NapCat API 响应内容: {response_data}")
 
-                    if ws.response and ws.response.status == 101 and response_data.get("code") == 0: # Status 101 is needed for websockets
-                        member_list = []
-                        if "data" in response_data and isinstance(response_data["data"], list):
-                            member_list = [str(member.get("user_id", "")) for member in response_data["data"] if isinstance(member, dict)]
-                        else:
-                             logger.warning(f"NapCat API 响应数据格式不正确: {response_data}")
-                        
-                        logger.info(f"成功获取群成员列表，群号: {group_id}，成员数量: {len(member_list)}")
-                        return member_list
-                    else:
-                        logger.error(f"获取群成员列表失败: {ws.response.status if ws.response else 'N/A'} - {response_data}")
-                        return None
+                if response.status == 200 and response_data.get("status") == "ok" and response_data.get("retcode") == 0:
+                    member_list = [str(member["user_id"]) for member in response_data.get("data", [])] # 提取QQ号
+                    logger.info(f"成功获取群成员列表，群号: {group_id}，成员数量: {len(member_list)}")
+                    return member_list
+                else:
+                    logger.error(f"获取群成员列表失败: {response.status} - {response_data}")
+                    return None
         except Exception as e:
             logger.exception(f"从 NapCat 获取群成员列表失败: {e}")
             return None
+
