@@ -1,31 +1,88 @@
-from astrbot.api.all import *
+import aiohttp
+import random
+import astrbot.api.star as star
+import astrbot.api.event.filter as filter
+from astrbot.api.event import AstrMessageEvent, MessageEventResult
+from astrbot.api import llm_tool, logger
+from astrbot.core.message import components
 
-@register(
-    "astrbot_plugin_repeat",
-    "ましろSaber",
-    "连续监测到两条相同的消息后自动复读一遍",
-    "1.0.0",
-    "repo url"
+@star.register(
+    "qq_group_raffler",  # 插件名称
+    "Your Name",  # 作者
+    "QQ 群随机抽人",  # 插件描述
+    "1.0.0",  # 版本号
+    "https://github.com/your_repo"  # 仓库地址
 )
-class RepeatMessagePlugin(Star):
-    def __init__(self, context: Context):
+class QQGroupRafflerPlugin(star.Star):
+    def __init__(self, context: star.Context) -> None:
         super().__init__(context)
-        self.last_message = None
-        self.repeat_count = 0
+        self.context = context
+        self.napcat_api_url = self.context.get_config()['platform_settings'].get('napcat_api_url', '')  # NapCat API 地址
+        self.napcat_api_key = self.context.get_config()['platform_settings'].get('napcat_api_key', '') # NapCat API 密钥
 
-    @event_message_type(EventMessageType.ALL)
-    async def on_message(self, event: AstrMessageEvent):
+    @filter.command("抽人")
+    async def raffle_command(self, event: AstrMessageEvent, count: int = 1):
         """
-        监听所有消息，如果连续两条消息相同，则自动复读一遍。
+        从 QQ 群随机抽取指定数量的群员。
+        使用方法: /抽人 <数量>
         """
-        current_message = event.message_str
+        group_id = event.message_obj.group_id
+        if not group_id:
+            yield event.plain_result("该指令只能在群组中使用。")
+            return
 
-        if self.last_message == current_message:
-            self.repeat_count += 1
-            if self.repeat_count == 1:  # 连续两条相同
-                yield event.plain_result(f"{current_message}") # 复读消息
-                self.repeat_count = 0 # 防止连续复读，重置计数器
-        else:
-            self.repeat_count = 0 
-        
-        self.last_message = current_message 
+        try:
+            member_list = await self.get_group_members_via_napcat(group_id)
+            if not member_list:
+                yield event.plain_result("获取群成员列表失败，请检查 NapCat API 是否配置正确。")
+                return
+
+            if count <= 0:
+                yield event.plain_result("抽取数量必须大于 0。")
+                return
+
+            if count > len(member_list):
+                yield event.plain_result(f"抽取数量超过群成员总数（{len(member_list)}人）。")
+                return
+
+            winners = random.sample(member_list, count)
+            result_str = "恭喜以下幸运群友：\n" + "\n".join(winners)
+            yield event.plain_result(result_str)
+
+        except ValueError:
+            yield event.plain_result("抽取数量必须为整数。")
+        except Exception as e:
+            logger.exception(f"抽人失败: {e}")
+            yield event.plain_result(f"抽人失败，请稍后再试。{e}")
+
+    async def get_group_members_via_napcat(self, group_id: str) -> list:
+        """
+        通过 NapCat API 获取群成员列表。
+        """
+        if not self.napcat_api_url or not self.napcat_api_key:
+            logger.error("NapCat API URL or API Key not configured.")
+            return None
+
+        url = f"{self.napcat_api_url}/get_group_member_list"  # 替换为实际的 NapCat 获取群成员 API
+        headers = {
+            "Authorization": f"Bearer {self.napcat_api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "group_id": group_id
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=data) as response:
+                    response_data = await response.json()
+                    if response.status == 200 and response_data.get("code") == 0:
+                        member_list = [str(member["user_id"]) for member in response_data.get("data", [])] # 提取QQ号
+                        logger.info(f"成功获取群成员列表，群号: {group_id}，成员数量: {len(member_list)}")
+                        return member_list
+                    else:
+                        logger.error(f"获取群成员列表失败: {response.status} - {response_data}")
+                        return None
+        except Exception as e:
+            logger.exception(f"从 NapCat 获取群成员列表失败: {e}")
+            return None
